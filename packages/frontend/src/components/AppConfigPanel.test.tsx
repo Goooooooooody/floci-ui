@@ -170,4 +170,43 @@ describe('AppConfigPanel configuration editor', () => {
         await waitFor(() => expect(screen.getByLabelText('Configuration content')).toHaveValue('{"a":1}'))
         expect(screen.getByText(/latest is 2/)).toBeInTheDocument()
     })
+
+    test('does not offer publishing when the current version failed to load', async () => {
+        cloudProxyMocks.getAppConfigHostedConfigurationVersion.mockRejectedValue(new Error('load failed'))
+        await renderWithProfileSelected()
+
+        expect(await screen.findByText('load failed')).toBeInTheDocument()
+        expect(screen.getByLabelText('Configuration content')).toBeDisabled()
+        expect(screen.getByRole('button', {name: /create new version/i})).toBeDisabled()
+    })
+
+    test('a description alone can be published, and discarding clears it', async () => {
+        cloudProxyMocks.createAppConfigHostedConfigurationVersion.mockResolvedValue(version(3, '{"a":2}'))
+        const user = await renderWithProfileSelected()
+        await waitFor(() => expect(screen.getByLabelText('Configuration content')).toHaveValue('{"a":2}'))
+
+        await user.type(screen.getByLabelText('Version description'), 'no-op release')
+        expect(screen.getByRole('button', {name: /create new version/i})).toBeEnabled()
+
+        await user.click(screen.getByRole('button', {name: /discard changes/i}))
+        expect(screen.getByLabelText('Version description')).toHaveValue('')
+        expect(screen.getByRole('button', {name: /create new version/i})).toBeDisabled()
+    })
+
+    test('asks before an older version replaces unsaved edits', async () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+        const user = await renderWithProfileSelected()
+        const editor = await screen.findByLabelText('Configuration content')
+        await waitFor(() => expect(editor).toHaveValue('{"a":2}'))
+        await user.type(editor, ' ')
+
+        await user.click(screen.getByTitle('Edit from version 1'))
+        expect(confirm).toHaveBeenCalledTimes(1)
+        expect(editor).toHaveValue('{"a":2} ')
+
+        confirm.mockReturnValue(true)
+        await user.click(screen.getByTitle('Edit from version 1'))
+        await waitFor(() => expect(editor).toHaveValue('{"a":1}'))
+        confirm.mockRestore()
+    })
 })

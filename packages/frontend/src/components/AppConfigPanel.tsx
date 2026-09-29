@@ -198,11 +198,14 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
         }),
         onSuccess: (version) => {
             // Publish: the new version becomes the one being edited, and the deploy form is ready for it.
-            setSelectedVersionNumber(version.versionNumber)
-            setEditBaseVersion(version.versionNumber)
-            setDraft(undefined)
-            setContentTypeDraft(undefined)
-            setVersionDescription('')
+            // Only if that profile is still the one open: the user may have switched while this was in flight.
+            if (version.configurationProfileId === selectedProfileId) {
+                setSelectedVersionNumber(version.versionNumber)
+                setEditBaseVersion(version.versionNumber)
+                setDraft(undefined)
+                setContentTypeDraft(undefined)
+                setVersionDescription('')
+            }
             setDeployProfileId(version.configurationProfileId)
             setDeployVersion(String(version.versionNumber))
             void qc.invalidateQueries({queryKey: versionsKey})
@@ -213,7 +216,8 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
         mutationFn: (versionNumber: number) => deleteAppConfigHostedConfigurationVersion(cloud, applicationId ?? '', selectedProfileId ?? '', versionNumber),
         onSuccess: (_, versionNumber) => {
             if (selectedVersionNumber === versionNumber) setSelectedVersionNumber(undefined)
-            if (editBaseVersion === versionNumber) discardDraft(undefined)
+            // The typed draft survives; the editor falls back to the latest version as its base.
+            if (editBaseVersion === versionNumber) setEditBaseVersion(undefined)
             if (deployVersion === String(versionNumber)) setDeployVersion('')
             setConfirmVersion(null)
             void qc.invalidateQueries({queryKey: versionsKey})
@@ -291,8 +295,12 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
     const editorContentType = contentTypeDraft ?? baseContentQuery.data?.contentType ?? DEFAULT_CONTENT_TYPE
     const editorLoading = Boolean(baseVersionNumber) && baseContentQuery.isLoading
     const contentError = jsonError(editorContentType, editorContent)
-    const dirty = (draft !== undefined && draft !== baseContent) || (contentTypeDraft !== undefined && contentTypeDraft !== (baseContentQuery.data?.contentType ?? DEFAULT_CONTENT_TYPE))
-    const canSave = Boolean(selectedProfileId) && runtimeReachable && dirty && !editorLoading && !contentError && Boolean(editorContent.trim())
+    const dirty = (draft !== undefined && draft !== baseContent)
+        || (contentTypeDraft !== undefined && contentTypeDraft !== (baseContentQuery.data?.contentType ?? DEFAULT_CONTENT_TYPE))
+        || versionDescription.trim() !== ''
+    // With a base version, the editor must have loaded it: publishing over content the user never saw would drop it.
+    const baseReady = !baseVersionNumber || baseContentQuery.isSuccess
+    const canSave = Boolean(selectedProfileId) && runtimeReachable && dirty && baseReady && !contentError && Boolean(editorContent.trim())
 
     function submitEnvironment(event: FormEvent<HTMLFormElement>) {
         event.preventDefault()
@@ -313,6 +321,12 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
         setEditBaseVersion(base)
         setDraft(undefined)
         setContentTypeDraft(undefined)
+        setVersionDescription('')
+    }
+
+    function editFromVersion(versionNumber: number) {
+        if (dirty && !window.confirm('Discard your unsaved changes and edit this version instead?')) return
+        discardDraft(versionNumber)
     }
 
     function formatJson() {
@@ -475,7 +489,7 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
                     aria-label="Configuration content"
                     aria-invalid={Boolean(contentError)}
                     spellCheck={false}
-                    disabled={!selectedProfileId || !runtimeReachable || editorLoading}
+                    disabled={!selectedProfileId || !runtimeReachable || !baseReady}
                 />
                 {contentError && <div className="form-error">Invalid JSON: {contentError}</div>}
                 {baseContentQuery.error instanceof Error && <div className="form-error">{baseContentQuery.error.message}</div>}
@@ -499,7 +513,7 @@ function AccountScopedAppConfigPanel({accountId, cloud, resource, runtimeReachab
                                     <td onClick={() => setSelectedVersionNumber(version.versionNumber)}>{version.contentType ?? '-'}</td>
                                     <td onClick={() => setSelectedVersionNumber(version.versionNumber)}>{version.description ?? '-'}</td>
                                     <td className="table-actions">
-                                        <button className="icon-btn" type="button" title={`Edit from version ${version.versionNumber}`} onClick={() => discardDraft(version.versionNumber)}>
+                                        <button className="icon-btn" type="button" title={`Edit from version ${version.versionNumber}`} onClick={() => editFromVersion(version.versionNumber)}>
                                             <Pencil size={13}/>
                                         </button>
                                         {confirmVersion === version.versionNumber ? (
